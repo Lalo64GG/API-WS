@@ -2,51 +2,48 @@ package mqtt
 
 import (
 	"api-ws/src/ws"
+	"fmt"
 	"log"
+	"time"
 
-	"github.com/streadway/amqp"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 func StartMQTTConsumer() {
-	conn, err := amqp.Dial("amqp://prueba:prueba@54.87.158.59:5672/")
-	if err != nil {
-		log.Fatal("Error al conectar con RabbitMQ:", err)
-	}
-	defer conn.Close()
+	opts := mqtt.NewClientOptions().
+		AddBroker("tcp://174.129.39.244:1883").
+		SetClientID("go_mqtt_ws_bridge").
+		SetUsername("prueba").
+		SetPassword("prueba")
 
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Fatal("Error al abrir canal:", err)
-	}
-	defer ch.Close()
+	opts.OnConnect = func(c mqtt.Client) {
+		log.Println("✅ Conectado al broker MQTT")
 
-	q, err := ch.QueueDeclare(
-		"productos", 
-		true,       
-		false,       
-		false,       
-		false,       
-		nil,
-	)
-	if err != nil {
-		log.Fatal("Error al declarar la cola:", err)
+		if token := c.Subscribe("prueba.estado", 1, messageHandler); token.Wait() && token.Error() != nil {
+			log.Fatalf("❌ Error al suscribirse a prueba.estado: %v", token.Error())
+		}
+		if token := c.Subscribe("prueba.alerta", 1, messageHandler); token.Wait() && token.Error() != nil {
+			log.Fatalf("❌ Error al suscribirse a prueba.alerta: %v", token.Error())
+		}
 	}
 
-	msgs, err := ch.Consume(
-		q.Name,
-		"",
-		true,  
-		false, 
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatal("Error al consumir mensajes:", err)
+	opts.OnConnectionLost = func(c mqtt.Client, err error) {
+		log.Printf("⚠️ Conexión perdida con MQTT: %v", err)
 	}
 
-	for msg := range msgs {
-		log.Printf("Mensaje recibido: %s", msg.Body)
-		ws.SendMessageToClients(string(msg.Body))
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("❌ No se pudo conectar al broker MQTT: %v", token.Error())
 	}
+
+	for {
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func messageHandler(client mqtt.Client, msg mqtt.Message) {
+	payload := string(msg.Payload())
+	log.Printf("📥 MQTT recibido [%s]: %s", msg.Topic(), payload)
+
+	ws.SendMessageToClients(fmt.Sprintf("[%s] %s", msg.Topic(), payload))
 }
